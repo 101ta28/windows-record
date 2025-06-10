@@ -72,6 +72,7 @@ uv run client.py
 
 - デフォルトでポート5001で待機します。
 - 録画ファイルは `screen_YYYYMMDD_HHMMSS.mp4`、`webcam_YYYYMMDD_HHMMSS.mp4` 形式で保存されます。
+- プログラムの停止は `Ctrl + C` を行ってください。
 
 ###### バッチファイルによる起動
 
