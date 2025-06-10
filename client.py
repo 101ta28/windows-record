@@ -7,7 +7,7 @@ screen_proc = None
 webcam_proc = None
 
 # 🎮 ゲーム音（ステレオミックスなど）
-GAME_AUDIO_DEVICE = "ステレオ ミキサー (Realtek High Definition Audio)"
+GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
 
 # 🧑‍💻 マイク＆カメラ
 MIC_AUDIO_DEVICE = "ヘッドセット マイク (2- Astro MixAmp Pro Voice)"
