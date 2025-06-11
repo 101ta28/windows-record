@@ -115,13 +115,23 @@ def handle_client(conn, addr):
 
 
 def run_server(host="0.0.0.0", port=5001):
+    global should_exit
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, port))
         s.listen()
+        s.settimeout(1.0)
+
         print(f"📡 録画サーバー起動中...（port {port}）")
-        while True:
-            conn, addr = s.accept()
-            threading.Thread(target=handle_client, args=(conn, addr)).start()
+        try:
+            while not should_exit:
+                try:
+                    conn, addr = s.accept()
+                    threading.Thread(target=handle_client, args=(conn, addr)).start()
+                except socket.timeout:
+                    continue
+        except KeyboardInterrupt:
+            print("\n🛑 Ctrl+C を検出。サーバーを終了します。")
+            stop_recording()
 
 
 if __name__ == "__main__":
