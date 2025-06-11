@@ -5,6 +5,7 @@ import threading
 
 screen_proc = None
 webcam_proc = None
+should_exit = False
 
 # 🎮 ゲーム音（ステレオミックスなど）
 GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
