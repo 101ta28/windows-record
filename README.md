@@ -9,7 +9,7 @@
 
 ## 環境構築
 
-### uv を用いる場合
+### [uv](https://docs.astral.sh/uv/)を用いる場合
 
 1. `uv sync` を実行してください。
 2. `uv run <filename>.py`を実行してください。
