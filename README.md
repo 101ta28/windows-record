@@ -11,31 +11,35 @@
 
 ### [uv](https://docs.astral.sh/uv/)を用いる場合
 
-1. `uv sync` を実行してください。
-2. `uv run <filename>.py`を実行してください。
+1. **uv をインストール**
+   Powershell を起動し、コマンドを実行します。
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
-3. **Python 3.12 以上をインストール**  
-   `.python-version`ファイルに記載されています。
-
-4. **ffmpeg をインストール**  
-   Windowsの場合、以下のコマンドでインストールできます。  
-
+2. **ffmpeg をインストール**  
    ```powershell
    winget install --id=Gyan.FFmpeg -e
    ```
 
-5. **録音・録画デバイス名の確認**  
+3. Powershellの画面を閉じます。
+
+4. Powershellを再度起動します。
+
+5. リポジトリのZipファイルを[ダウンロード](https://github.com/101ta28/windows-record/archive/refs/heads/main.zip)してください。
+
+6. Zipファイルを展開してください。
+
+7. Powershell 内で展開したZipファイルのフォルダに移動してください。
+
+8. `uv sync` を実行してください。
+
+9. **録音・録画デバイス名の確認**  
    コマンドプロンプトで以下を実行し、AUDIO_DEVICE・WEBCAM_DEVICEの値を調べてください。  
 
    ```powershell
    ffmpeg -list_devices true -f dshow -i dummy
    ```
-
-6. **依存パッケージ**  
-   標準ライブラリのみ使用しています。追加インストールは不要です。
-
-7. **開発用依存パッケージ**
-   フォーマッタとしてRuffを導入しています。
 
 ---
 
