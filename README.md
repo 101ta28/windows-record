@@ -11,7 +11,7 @@
 
 ### [uv](https://docs.astral.sh/uv/)を用いる場合
 
-1. **uv をインストール**
+1. **uv をインストール**  
    Powershell を起動し、コマンドを実行します。
    ```powershell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
