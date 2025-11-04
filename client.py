@@ -6,6 +6,7 @@ import threading
 screen_proc = None
 webcam_proc = None
 should_exit = False
+proc_lock = threading.Lock()
 
 # 🎮 ゲーム音（ステレオミックスなど）
 GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
@@ -68,51 +69,99 @@ def build_cmds():
 
 
 def start_recording():
+    """ffmpeg を二重起動しないようロックで保護しつつ開始する。"""
     global screen_proc, webcam_proc
-    if screen_proc or webcam_proc:
-        return  # 重複起動防止
-    screen_cmd, webcam_cmd = build_cmds()
-    screen_proc = subprocess.Popen(screen_cmd, stdin=subprocess.PIPE)
-    webcam_proc = subprocess.Popen(webcam_cmd, stdin=subprocess.PIPE)
-    print("🎥 録画開始")
+    with proc_lock:
+        if screen_proc or webcam_proc:
+            print("ℹ️ 既に録画中です")
+            return
+
+        screen_cmd, webcam_cmd = build_cmds()
+        new_screen_proc = None
+        new_webcam_proc = None
+
+        try:
+            new_screen_proc = subprocess.Popen(screen_cmd, stdin=subprocess.PIPE)
+            new_webcam_proc = subprocess.Popen(webcam_cmd, stdin=subprocess.PIPE)
+        except Exception as exc:
+            # 片方だけ起動した場合に備えて必ず停止させる
+            if new_screen_proc and new_screen_proc.poll() is None:
+                _force_terminate(new_screen_proc)
+            if new_webcam_proc and new_webcam_proc.poll() is None:
+                _force_terminate(new_webcam_proc)
+            print(f"⚠️ 録画開始に失敗しました: {exc}")
+            return
+
+        screen_proc = new_screen_proc
+        webcam_proc = new_webcam_proc
+        print("🎥 録画開始")
 
 
 def stop_recording():
     global screen_proc, webcam_proc
-    if screen_proc:
-        try:
-            if screen_proc.poll() is None:  # 実行中かチェック
-                screen_proc.stdin.write(b"q\n")
-                screen_proc.stdin.flush()
-                screen_proc.wait(timeout=5)
-        except Exception as e:
-            print(f"⚠️ screen 停止失敗: {e}, 強制終了")
-            screen_proc.terminate()
-        screen_proc = None
+    with proc_lock:
+        if screen_proc:
+            _graceful_stop(screen_proc, "screen")
+            screen_proc = None
 
-    if webcam_proc:
-        try:
-            if webcam_proc.poll() is None:
-                webcam_proc.stdin.write(b"q\n")
-                webcam_proc.stdin.flush()
-                webcam_proc.wait(timeout=5)
-        except Exception as e:
-            print(f"⚠️ webcam 停止失敗: {e}, 強制終了")
-            webcam_proc.terminate()
-        webcam_proc = None
+        if webcam_proc:
+            _graceful_stop(webcam_proc, "webcam")
+            webcam_proc = None
 
     print("⏹️ 録画停止")
+
+
+def _graceful_stop(proc, name):
+    if proc.poll() is not None:
+        return
+    try:
+        if proc.stdin:
+            proc.stdin.write(b"q\n")
+            proc.stdin.flush()
+        proc.wait(timeout=5)
+    except Exception as exc:
+        print(f"⚠️ {name} 停止失敗: {exc}, 強制終了")
+        _force_terminate(proc)
+    finally:
+        try:
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
+        except Exception:
+            pass
+
+
+def _force_terminate(proc):
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _current_status():
+    with proc_lock:
+        if screen_proc or webcam_proc:
+            return "RUNNING"
+    return "IDLE"
 
 
 def handle_client(conn, addr):
     with conn:
         cmd = conn.recv(1024).decode().strip()
         print(f"{addr} → {cmd}")
+
         if cmd == "start":
             start_recording()
+            status = _current_status()
         elif cmd == "stop":
             stop_recording()
-        conn.sendall(b"OK\n")
+            status = "STOPPED"
+        else:
+            status = "UNKNOWN"
+        conn.sendall(f"{status}\n".encode())
 
 
 def run_server(host="0.0.0.0", port=5001):
@@ -127,7 +176,8 @@ def run_server(host="0.0.0.0", port=5001):
             while not should_exit:
                 try:
                     conn, addr = s.accept()
-                    threading.Thread(target=handle_client, args=(conn, addr)).start()
+                    worker = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+                    worker.start()
                 except socket.timeout:
                     continue
         except KeyboardInterrupt:
