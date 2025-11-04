@@ -75,7 +75,8 @@ uv run client.py
 ```
 
 - デフォルトでポート5001で待機します。
-- 録画ファイルは `screen_YYYYMMDD_HHMMSS.mp4`、`webcam_YYYYMMDD_HHMMSS.mp4` 形式で保存されます。
+- 録画ファイルは `recordings/` フォルダ配下に `screen_YYYYMMDD_HHMMSS.mp4`、`webcam_YYYYMMDD_HHMMSS.mp4` 形式で保存されます。
+- `RECORD_OUTPUT_DIR` 環境変数を設定するか、`client.py` 内の `OUTPUT_DIR` を変更することで保存先をカスタマイズできます。（相対パス指定時は `client.py` と同じ階層を基準とします）
 - プログラムの停止は `Ctrl + C` を行ってください。
 
 ###### バッチファイルによる起動
@@ -100,8 +101,9 @@ uv run master.py
 ## 注意事項
 
 - 録画デバイス名（AUDIO_DEVICE, WEBCAM_DEVICE）は各PCの環境に合わせて設定してください。
+- 画面録画は互換性の高い `yuv420p` ピクセルフォーマットで保存されるため、標準的なプレイヤーで再生できます。
+- `client.py` の録画ファイルはデフォルトで `recordings/` に保存されます。必要に応じて `RECORD_OUTPUT_DIR` で出力先を変更してください。
 - ffmpegのパスが通っていない場合は、環境変数PATHに追加してください。
-- 録画ファイルはスクリプトを実行したディレクトリに保存されます。
 
 ---
 

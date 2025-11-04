@@ -1,7 +1,9 @@
-import subprocess
-import time
+import os
 import socket
+import subprocess
 import threading
+import time
+from pathlib import Path
 
 screen_proc = None
 webcam_proc = None
@@ -14,12 +16,23 @@ GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
 # 🧑‍💻 マイク＆カメラ
 MIC_AUDIO_DEVICE = "ヘッドセット マイク (2- Astro MixAmp Pro Voice)"
 WEBCAM_DEVICE = "Logi C270 HD WebCam"
+OUTPUT_DIR = Path(os.environ.get("RECORD_OUTPUT_DIR", "recordings"))
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_output_dir():
+    target = OUTPUT_DIR
+    if not target.is_absolute():
+        target = SCRIPT_DIR / target
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def build_cmds():
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    screen_file = f"screen_{timestamp}.mp4"
-    webcam_file = f"webcam_{timestamp}.mp4"
+    output_dir = _resolve_output_dir()
+    screen_file = output_dir / f"screen_{timestamp}.mp4"
+    webcam_file = output_dir / f"webcam_{timestamp}.mp4"
 
     # ゲーム画面 + ステレオミックス音声
     screen_cmd = [
@@ -45,7 +58,9 @@ def build_cmds():
         "ultrafast",
         "-c:a",
         "aac",
-        screen_file,
+        "-pix_fmt",
+        "yuv420p",
+        str(screen_file),
     ]
 
     # Webカメラ + マイク音声
@@ -62,10 +77,10 @@ def build_cmds():
         "ultrafast",
         "-c:a",
         "aac",
-        webcam_file,
+        str(webcam_file),
     ]
 
-    return screen_cmd, webcam_cmd
+    return screen_cmd, webcam_cmd, output_dir
 
 
 def start_recording():
@@ -76,7 +91,7 @@ def start_recording():
             print("ℹ️ 既に録画中です")
             return
 
-        screen_cmd, webcam_cmd = build_cmds()
+        screen_cmd, webcam_cmd, output_dir = build_cmds()
         new_screen_proc = None
         new_webcam_proc = None
 
@@ -94,7 +109,7 @@ def start_recording():
 
         screen_proc = new_screen_proc
         webcam_proc = new_webcam_proc
-        print("🎥 録画開始")
+        print(f"🎥 録画開始: {output_dir}")
 
 
 def stop_recording():
