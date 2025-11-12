@@ -9,7 +9,9 @@
 
 ## 環境構築
 
-### [uv](https://docs.astral.sh/uv/)を用いる場合
+### [uv](https://docs.astral.sh/uv/)を用いる場合 
+
+下記の 1, 2 は `setup.bat` を実行することで省略できます。
 
 1. **uv をインストール**  
    Powershell を起動し、コマンドを実行します。
