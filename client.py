@@ -3,6 +3,7 @@ import socket
 import subprocess
 import threading
 import time
+import argparse
 from pathlib import Path
 
 screen_proc = None
@@ -16,16 +17,42 @@ GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
 # 🧑‍💻 マイク＆カメラ
 MIC_AUDIO_DEVICE = "ヘッドセット マイク (2- Astro MixAmp Pro Voice)"
 WEBCAM_DEVICE = "Logi C270 HD WebCam"
-OUTPUT_DIR = Path(os.environ.get("RECORD_OUTPUT_DIR", "recordings"))
+
+OUTPUT_DIR = Path(r"C:\Users\User\Downloads")
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
+def set_output_dir(path):
+    """実行時に保存先を変更するためのユーティリティ（Path へ変換して設定）"""
+    global OUTPUT_DIR
+    OUTPUT_DIR = path
+
+
 def _resolve_output_dir():
+    """
+    OUTPUT_DIR を Path に正規化して返す。
+    - expanduser() を行う（~ を使える）
+    - 文字列や Path オブジェクトを受け付ける
+    - 相対パスならスクリプト位置を基準に絶対化する
+    - ディレクトリがなければ作る
+    """
     target = OUTPUT_DIR
-    if not target.is_absolute():
-        target = SCRIPT_DIR / target
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+
+    # 文字列や Path 以外が来たら早期にわかるようにエラー
+    if not isinstance(target, (str, Path)):
+        raise RuntimeError(f"Invalid RECORD_OUTPUT_DIR value: {repr(target)} (type={type(target)})")
+
+    # Path に変換してホーム展開
+    target_path = Path(str(target)).expanduser()
+
+    # 相対パスならスクリプトディレクトリ基準で絶対化
+    if not target_path.is_absolute():
+        target_path = (SCRIPT_DIR / target_path)
+
+    # 作成（存在すれば何もしない）
+    target_path.mkdir(parents=True, exist_ok=True)
+    return target_path
 
 
 def build_cmds():
@@ -84,7 +111,6 @@ def build_cmds():
 
 
 def start_recording():
-    """ffmpeg を二重起動しないようロックで保護しつつ開始する。"""
     global screen_proc, webcam_proc
     with proc_lock:
         if screen_proc or webcam_proc:
@@ -181,6 +207,14 @@ def handle_client(conn, addr):
 
 def run_server(host="0.0.0.0", port=5001):
     global should_exit
+    try:
+        resolved = _resolve_output_dir()
+    except Exception as exc:
+        print(f"ERROR: 出力先の解決に失敗しました: {exc}")
+        raise
+
+    print(f"📁 出力先ディレクトリ: {resolved}")
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, port))
         s.listen()
@@ -201,4 +235,9 @@ def run_server(host="0.0.0.0", port=5001):
 
 
 if __name__ == "__main__":
-    run_server()
+    parser = argparse.ArgumentParser(description="録画サーバー")
+    parser.add_argument("--host", default="0.0.0.0", help="バインドするホスト")
+    parser.add_argument("--port", "-p", type=int, default=5001, help="ポート番号")
+    args = parser.parse_args()
+
+    run_server(host=args.host, port=args.port)
