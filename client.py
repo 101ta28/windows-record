@@ -23,52 +23,36 @@ GAME_AUDIO_DEVICE = "ライン (Astro MixAmp Pro Game)"
 MIC_AUDIO_DEVICE = "ヘッドセット マイク (2- Astro MixAmp Pro Voice)"
 WEBCAM_DEVICE = "Logi C270 HD WebCam"
 
+# 出力先（必要なら set_output_dir() で変更）
 OUTPUT_DIR = Path(r"C:\Users\User\Downloads")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def set_output_dir(path):
-    """実行時に保存先を変更するためのユーティリティ（Path へ変換して設定）"""
+    """実行時に保存先を変更（Pathに変換）"""
     global OUTPUT_DIR
     OUTPUT_DIR = Path(path)
 
 
 def _resolve_output_dir():
-    """
-    OUTPUT_DIR を Path に正規化して返す。
-    - expanduser() を行う（~ を使える）
-    - 文字列や Path オブジェクトを受け付ける
-    - 相対パスならスクリプト位置を基準に絶対化する
-    - ディレクトリがなければ作る
-    """
     target = OUTPUT_DIR
-
-    # 文字列や Path 以外が来たら早期にわかるようにエラー
     if not isinstance(target, (str, Path)):
         raise RuntimeError(f"Invalid RECORD_OUTPUT_DIR value: {repr(target)} (type={type(target)})")
-
-    # Path に変換してホーム展開
     target_path = Path(str(target)).expanduser()
-
-    # 相対パスならスクリプトディレクトリ基準で絶対化
     if not target_path.is_absolute():
         target_path = (SCRIPT_DIR / target_path)
-
-    # 作成（存在すれば何もしない）
     target_path.mkdir(parents=True, exist_ok=True)
     return target_path
 
 
 def _get_screen_resolution():
     """
-    Windows API から画面解像度を取得する。
-    取得に失敗した場合は 1920x1080 を返す（フォールバック）。
+    Windows API から画面解像度を取得（フォールバックは 1920x1080）
     """
     try:
         user32 = ctypes.windll.user32
         try:
-            # DPI の影響を抑える（環境により例外になることがある）
             user32.SetProcessDPIAware()
         except Exception:
             pass
@@ -80,52 +64,68 @@ def _get_screen_resolution():
 
 
 def build_cmds():
+    """
+    ffmpeg コマンドを返す。
+    重要な点：
+      - screen: gdigrab 用に video_size / draw_mouse / offset を指定
+      - probe/analyzeduration / thread_queue_size / rtbufsize を指定して安定化
+      - 出力コンテナは .mkv（途中停止時の壊れにくさ）
+    """
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_dir = _resolve_output_dir()
-    screen_file = output_dir / f"screen_{timestamp}.mp4"
-    webcam_file = output_dir / f"webcam_{timestamp}.mp4"
+    screen_file = output_dir / f"screen_{timestamp}.mkv"
+    webcam_file = output_dir / f"webcam_{timestamp}.mkv"
 
-    # 画面解像度を取得して gdigrab に渡す（安定化のため）
     screen_w, screen_h = _get_screen_resolution()
     video_size = f"{screen_w}x{screen_h}"
 
-    # ゲーム画面 + ステレオミックス音声
-    # -draw_mouse 1 でカーソルも保存、-video_size で確実に画面全体をキャプチャ
+    # 注意: -probesize/-analyzeduration は入力解析に影響するため入力の前に置く
+    # thread_queue_size は入力直前に置くことで入力キューを確保します
     screen_cmd = [
         "ffmpeg",
         "-y",
+        # 入力解析の余裕を増やす（警告対処）
+        "-probesize", "50M",
+        "-analyzeduration", "100M",
+        # gdigrab 入力
         "-f", "gdigrab",
         "-framerate", "30",
         "-draw_mouse", "1",
         "-offset_x", "0",
         "-offset_y", "0",
         "-video_size", video_size,
+        "-rtbufsize", "200M",
         "-i", "desktop",
+        # 音声入力（dshow）に対するキュー
+        "-thread_queue_size", "512",
         "-f", "dshow",
         "-i", f"audio={GAME_AUDIO_DEVICE}",
+        # マッピングとエンコード
         "-map", "0:v",
         "-map", "1:a",
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-c:a", "aac",
+        "-r", "30",  # 出力フレームレートを固定
         "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
         str(screen_file),
     ]
 
-    # Webカメラ + マイク音声
+    # Webカメラ + マイク
     webcam_cmd = [
         "ffmpeg",
         "-y",
-        "-f",
-        "dshow",
-        "-i",
-        f"video={WEBCAM_DEVICE}:audio={MIC_AUDIO_DEVICE}",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-c:a",
-        "aac",
+        "-probesize", "25M",
+        "-analyzeduration", "50M",
+        "-thread_queue_size", "512",
+        "-f", "dshow",
+        "-rtbufsize", "200M",
+        "-i", f"video={WEBCAM_DEVICE}:audio={MIC_AUDIO_DEVICE}",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-r", "30",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
         str(webcam_file),
     ]
 
@@ -143,39 +143,35 @@ def start_recording():
         new_screen_proc = None
         new_webcam_proc = None
 
-        # ログファイルを用意
         screen_log = output_dir / "screen_ffmpeg.log"
         webcam_log = output_dir / "webcam_ffmpeg.log"
 
-        # ログファイルハンドルはグローバルに保持しておく（プロセス終了まで開いたままにする）
         screen_log_f = None
         webcam_log_f = None
 
         try:
-            # バイナリで開く（ffmpeg の出力をそのまま保存）
+            # ログは追記モードで開く（プロセスが再試行されても追記される）
             screen_log_f = open(screen_log, "ab")
             webcam_log_f = open(webcam_log, "ab")
 
-            # ffmpeg のエラーログを確認しやすくするため stdout/stderr をログへリダイレクト
             new_screen_proc = subprocess.Popen(
                 screen_cmd,
                 stdin=subprocess.PIPE,
                 stdout=screen_log_f,
                 stderr=subprocess.STDOUT,
-                creationflags=0
             )
             new_webcam_proc = subprocess.Popen(
                 webcam_cmd,
                 stdin=subprocess.PIPE,
                 stdout=webcam_log_f,
                 stderr=subprocess.STDOUT,
-                creationflags=0
             )
 
-            # 少し待ってプロセスが即終了していないか確認（起動エラーの検出）
-            time.sleep(0.6)
+            # 起動の安定を見るため少し長めに待つ
+            time.sleep(1.2)
+
+            # 即死チェック
             if new_screen_proc.poll() is not None:
-                # 起動失敗 -> ログの末尾を表示して原因の手がかりを出す
                 try:
                     screen_log_f.flush()
                     screen_log_f.close()
@@ -185,7 +181,7 @@ def start_recording():
                     with open(screen_log, "rb") as lf:
                         lines = lf.read().splitlines()[-200:]
                         print("⚠️ screen ffmpeg failed to start. last log lines:")
-                        for line in lines[-20:]:
+                        for line in lines[-30:]:
                             try:
                                 print(line.decode(errors="replace"))
                             except Exception:
@@ -204,7 +200,7 @@ def start_recording():
                     with open(webcam_log, "rb") as lf:
                         lines = lf.read().splitlines()[-200:]
                         print("⚠️ webcam ffmpeg failed to start. last log lines:")
-                        for line in lines[-20:]:
+                        for line in lines[-30:]:
                             try:
                                 print(line.decode(errors="replace"))
                             except Exception:
@@ -213,19 +209,17 @@ def start_recording():
                     pass
                 raise RuntimeError("webcam ffmpeg failed to start (see log).")
 
-            # 成功したのでグローバルに格納してログハンドルを保持
+            # 成功 -> グローバルに保持（ログハンドルはプロセス存続中保持）
             screen_proc = new_screen_proc
             webcam_proc = new_webcam_proc
             globals()["screen_log_f"] = screen_log_f
             globals()["webcam_log_f"] = webcam_log_f
 
         except Exception as exc:
-            # 片方だけ起動した場合に備えて必ず停止させる
             if new_screen_proc and new_screen_proc.poll() is None:
                 _force_terminate(new_screen_proc)
             if new_webcam_proc and new_webcam_proc.poll() is None:
                 _force_terminate(new_webcam_proc)
-            # 未保持のファイルハンドルは閉じる
             try:
                 if screen_log_f and not screen_log_f.closed:
                     screen_log_f.close()
@@ -253,7 +247,6 @@ def stop_recording():
             _graceful_stop(webcam_proc, "webcam")
             webcam_proc = None
 
-        # ログファイルを閉じる（存在する場合）
         try:
             if screen_log_f and not screen_log_f.closed:
                 screen_log_f.flush()
@@ -282,7 +275,7 @@ def _graceful_stop(proc, name):
                 proc.stdin.flush()
             except Exception:
                 pass
-        proc.wait(timeout=5)
+        proc.wait(timeout=7)
     except Exception as exc:
         print(f"⚠️ {name} 停止失敗: {exc}, 強制終了")
         _force_terminate(proc)
