@@ -4,10 +4,15 @@ import subprocess
 import threading
 import time
 import argparse
+import ctypes
 from pathlib import Path
 
+# グローバルプロセス&ログハンドル
 screen_proc = None
 webcam_proc = None
+screen_log_f = None
+webcam_log_f = None
+
 should_exit = False
 proc_lock = threading.Lock()
 
@@ -26,7 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 def set_output_dir(path):
     """実行時に保存先を変更するためのユーティリティ（Path へ変換して設定）"""
     global OUTPUT_DIR
-    OUTPUT_DIR = path
+    OUTPUT_DIR = Path(path)
 
 
 def _resolve_output_dir():
@@ -55,38 +60,55 @@ def _resolve_output_dir():
     return target_path
 
 
+def _get_screen_resolution():
+    """
+    Windows API から画面解像度を取得する。
+    取得に失敗した場合は 1920x1080 を返す（フォールバック）。
+    """
+    try:
+        user32 = ctypes.windll.user32
+        try:
+            # DPI の影響を抑える（環境により例外になることがある）
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+        w = user32.GetSystemMetrics(0)
+        h = user32.GetSystemMetrics(1)
+        return int(w), int(h)
+    except Exception:
+        return 1920, 1080
+
+
 def build_cmds():
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_dir = _resolve_output_dir()
     screen_file = output_dir / f"screen_{timestamp}.mp4"
     webcam_file = output_dir / f"webcam_{timestamp}.mp4"
 
+    # 画面解像度を取得して gdigrab に渡す（安定化のため）
+    screen_w, screen_h = _get_screen_resolution()
+    video_size = f"{screen_w}x{screen_h}"
+
     # ゲーム画面 + ステレオミックス音声
+    # -draw_mouse 1 でカーソルも保存、-video_size で確実に画面全体をキャプチャ
     screen_cmd = [
         "ffmpeg",
         "-y",
-        "-f",
-        "gdigrab",
-        "-framerate",
-        "30",
-        "-i",
-        "desktop",
-        "-f",
-        "dshow",
-        "-i",
-        f"audio={GAME_AUDIO_DEVICE}",
-        "-map",
-        "0:v",
-        "-map",
-        "1:a",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-c:a",
-        "aac",
-        "-pix_fmt",
-        "yuv420p",
+        "-f", "gdigrab",
+        "-framerate", "30",
+        "-draw_mouse", "1",
+        "-offset_x", "0",
+        "-offset_y", "0",
+        "-video_size", video_size,
+        "-i", "desktop",
+        "-f", "dshow",
+        "-i", f"audio={GAME_AUDIO_DEVICE}",
+        "-map", "0:v",
+        "-map", "1:a",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-c:a", "aac",
+        "-pix_fmt", "yuv420p",
         str(screen_file),
     ]
 
@@ -111,7 +133,7 @@ def build_cmds():
 
 
 def start_recording():
-    global screen_proc, webcam_proc
+    global screen_proc, webcam_proc, screen_log_f, webcam_log_f
     with proc_lock:
         if screen_proc or webcam_proc:
             print("ℹ️ 既に録画中です")
@@ -121,25 +143,107 @@ def start_recording():
         new_screen_proc = None
         new_webcam_proc = None
 
+        # ログファイルを用意
+        screen_log = output_dir / "screen_ffmpeg.log"
+        webcam_log = output_dir / "webcam_ffmpeg.log"
+
+        # ログファイルハンドルはグローバルに保持しておく（プロセス終了まで開いたままにする）
+        screen_log_f = None
+        webcam_log_f = None
+
         try:
-            new_screen_proc = subprocess.Popen(screen_cmd, stdin=subprocess.PIPE)
-            new_webcam_proc = subprocess.Popen(webcam_cmd, stdin=subprocess.PIPE)
+            # バイナリで開く（ffmpeg の出力をそのまま保存）
+            screen_log_f = open(screen_log, "ab")
+            webcam_log_f = open(webcam_log, "ab")
+
+            # ffmpeg のエラーログを確認しやすくするため stdout/stderr をログへリダイレクト
+            new_screen_proc = subprocess.Popen(
+                screen_cmd,
+                stdin=subprocess.PIPE,
+                stdout=screen_log_f,
+                stderr=subprocess.STDOUT,
+                creationflags=0
+            )
+            new_webcam_proc = subprocess.Popen(
+                webcam_cmd,
+                stdin=subprocess.PIPE,
+                stdout=webcam_log_f,
+                stderr=subprocess.STDOUT,
+                creationflags=0
+            )
+
+            # 少し待ってプロセスが即終了していないか確認（起動エラーの検出）
+            time.sleep(0.6)
+            if new_screen_proc.poll() is not None:
+                # 起動失敗 -> ログの末尾を表示して原因の手がかりを出す
+                try:
+                    screen_log_f.flush()
+                    screen_log_f.close()
+                except Exception:
+                    pass
+                try:
+                    with open(screen_log, "rb") as lf:
+                        lines = lf.read().splitlines()[-200:]
+                        print("⚠️ screen ffmpeg failed to start. last log lines:")
+                        for line in lines[-20:]:
+                            try:
+                                print(line.decode(errors="replace"))
+                            except Exception:
+                                print(line)
+                except Exception:
+                    pass
+                raise RuntimeError("screen ffmpeg failed to start (see log).")
+
+            if new_webcam_proc.poll() is not None:
+                try:
+                    webcam_log_f.flush()
+                    webcam_log_f.close()
+                except Exception:
+                    pass
+                try:
+                    with open(webcam_log, "rb") as lf:
+                        lines = lf.read().splitlines()[-200:]
+                        print("⚠️ webcam ffmpeg failed to start. last log lines:")
+                        for line in lines[-20:]:
+                            try:
+                                print(line.decode(errors="replace"))
+                            except Exception:
+                                print(line)
+                except Exception:
+                    pass
+                raise RuntimeError("webcam ffmpeg failed to start (see log).")
+
+            # 成功したのでグローバルに格納してログハンドルを保持
+            screen_proc = new_screen_proc
+            webcam_proc = new_webcam_proc
+            globals()["screen_log_f"] = screen_log_f
+            globals()["webcam_log_f"] = webcam_log_f
+
         except Exception as exc:
             # 片方だけ起動した場合に備えて必ず停止させる
             if new_screen_proc and new_screen_proc.poll() is None:
                 _force_terminate(new_screen_proc)
             if new_webcam_proc and new_webcam_proc.poll() is None:
                 _force_terminate(new_webcam_proc)
+            # 未保持のファイルハンドルは閉じる
+            try:
+                if screen_log_f and not screen_log_f.closed:
+                    screen_log_f.close()
+            except Exception:
+                pass
+            try:
+                if webcam_log_f and not webcam_log_f.closed:
+                    webcam_log_f.close()
+            except Exception:
+                pass
             print(f"⚠️ 録画開始に失敗しました: {exc}")
             return
 
-        screen_proc = new_screen_proc
-        webcam_proc = new_webcam_proc
-        print(f"🎥 録画開始: {output_dir}")
+        print(f"🎥 録画開始: {output_dir} (screen log → {screen_log}, webcam log → {webcam_log})")
 
 
 def stop_recording():
-    global screen_proc, webcam_proc
+    global screen_proc, webcam_proc, screen_log_f, webcam_log_f
     with proc_lock:
         if screen_proc:
             _graceful_stop(screen_proc, "screen")
@@ -149,6 +253,22 @@ def stop_recording():
             _graceful_stop(webcam_proc, "webcam")
             webcam_proc = None
 
+        # ログファイルを閉じる（存在する場合）
+        try:
+            if screen_log_f and not screen_log_f.closed:
+                screen_log_f.flush()
+                screen_log_f.close()
+        except Exception:
+            pass
+        try:
+            if webcam_log_f and not webcam_log_f.closed:
+                webcam_log_f.flush()
+                webcam_log_f.close()
+        except Exception:
+            pass
+        screen_log_f = None
+        webcam_log_f = None
+
     print("⏹️ 録画停止")
 
 
@@ -157,8 +277,11 @@ def _graceful_stop(proc, name):
         return
     try:
         if proc.stdin:
-            proc.stdin.write(b"q\n")
-            proc.stdin.flush()
+            try:
+                proc.stdin.write(b"q\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
         proc.wait(timeout=5)
     except Exception as exc:
         print(f"⚠️ {name} 停止失敗: {exc}, 強制終了")
