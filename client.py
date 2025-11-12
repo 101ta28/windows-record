@@ -275,7 +275,7 @@ def _graceful_stop(proc, name):
                 proc.stdin.flush()
             except Exception:
                 pass
-        proc.wait(timeout=7)
+        proc.wait(timeout=15)
     except Exception as exc:
         print(f"⚠️ {name} 停止失敗: {exc}, 強制終了")
         _force_terminate(proc)
